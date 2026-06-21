@@ -1,89 +1,106 @@
 # Smart Clinic Management System - Database Schema Design
 
-This document outlines the hybrid data tier architecture for the Smart Clinic Management System, leveraging **MySQL** for structured, transactional relationships and **MongoDB** for unstructured, rapidly evolving clinical data.
+This blueprint establishes a polyglot persistence strategy for the Smart Clinic Management System. Structured operations and transactional schedules are enforced via **MySQL**, while dynamic clinical artifacts are captured within **MongoDB**.
 
 ---
 
-## 1. MySQL Relational Database Design
+## MySQL Database Design
 
-The relational database handles core administrative, identity, and scheduling workflows. Data integrity is strictly maintained through primary keys, foreign keys, and unique constraints.
+The relational database layer enforces rigid schemas, physical constraints, and transaction rules to guarantee data integrity across identity, system access, and resource scheduling.
 
-### 1.1 `admins` Table
-Stores authentication and profile data for system administrators.
-* **Columns:**
-    * `id`: INT, AUTO_INCREMENT, PRIMARY KEY
-    * `username`: VARCHAR(50), UNIQUE, NOT NULL
-    * `password`: VARCHAR(255), NOT NULL (Hashed string)
-    * `email`: VARCHAR(100), UNIQUE, NOT NULL
+### Table: admin
+Tracks administrative identity credentials and system roles.
+- `id`: INT, Primary Key, Auto Increment
+- `username`: VARCHAR(50), Unique, Not Null
+- `password`: VARCHAR(255), Not Null *(Stores a hashed character string for data safety)*
+- `email`: VARCHAR(100), Unique, Not Null
+- `created_at`: TIMESTAMP, Default CURRENT_TIMESTAMP
 
-### 1.2 `doctors` Table
-Maintains medical practitioner registries and professional specializations.
-* **Columns:**
-    * `id`: INT, AUTO_INCREMENT, PRIMARY KEY
-    * `first_name`: VARCHAR(50), NOT NULL
-    * `last_name`: VARCHAR(50), NOT NULL
-    * `specialization`: VARCHAR(100), NOT NULL
-    * `phone`: VARCHAR(15), UNIQUE, NOT NULL
-    * `email`: VARCHAR(100), UNIQUE, NOT NULL
+### Table: patients
+Maintains active consumer accounts and core diagnostic demographics.
+- `id`: INT, Primary Key, Auto Increment
+- `first_name`: VARCHAR(50), Not Null
+- `last_name`: VARCHAR(50), Not Null
+- `email`: VARCHAR(100), Unique, Not Null *(Validated via regex in Java code prior to write)*
+- `password`: VARCHAR(255), Not Null *(Secured hashed credential)*
+- `date_of_birth`: DATE, Not Null
+- `phone`: VARCHAR(15), Unique, Not Null
+- `gender`: VARCHAR(10), Not Null
+- `is_active`: TINYINT(1), Default 1 *(Supports soft deletion to preserve clinical compliance history)*
 
-### 1.3 `patients` Table
-Tracks registered patient demographics and profile accounts.
-* **Columns:**
-    * `id`: INT, AUTO_INCREMENT, PRIMARY KEY
-    * `first_name`: VARCHAR(50), NOT NULL
-    * `last_name`: VARCHAR(50), NOT NULL
-    * `email`: VARCHAR(100), UNIQUE, NOT NULL
-    * `password`: VARCHAR(255), NOT NULL
-    * `date_of_birth`: DATE, NOT NULL
-    * `phone`: VARCHAR(15), UNIQUE, NOT NULL
+### Table: doctors
+Tracks medical staff registers and operational specialization fields.
+- `id`: INT, Primary Key, Auto Increment
+- `first_name`: VARCHAR(50), Not Null
+- `last_name`: VARCHAR(50), Not Null
+- `specialization`: VARCHAR(100), Not Null
+- `phone`: VARCHAR(15), Unique, Not Null
+- `email`: VARCHAR(100), Unique, Not Null
+- `license_number`: VARCHAR(50), Unique, Not Null
+- `consultation_fee`: DECIMAL(10,2), Not Null
 
-### 1.4 `appointments` Table
-Manages scheduling windows mapping patients to doctors.
-* **Columns:**
-    * `id`: INT, AUTO_INCREMENT, PRIMARY KEY
-    * `patient_id`: INT, NOT NULL, FOREIGN KEY REFERENCES `patients(id)` ON DELETE CASCADE
-    * `doctor_id`: INT, NOT NULL, FOREIGN KEY REFERENCES `doctors(id)` ON DELETE RESTRICT
-    * `appointment_date`: DATE, NOT NULL
-    * `time_slot`: TIME, NOT NULL (Constrained to 1-hour intervals)
-    * `status`: VARCHAR(20), DEFAULT 'CONFIRMED' (e.g., CONFIRMED, CANCELLED, COMPLETED)
-* **Constraints:**
-    * `UNIQUE(doctor_id, appointment_date, time_slot)`: Restricts double-booking a specific doctor at the same time.
+### Table: appointments
+Binds resources together under structural transaction blocks.
+- `id`: INT, Primary Key, Auto Increment
+- `doctor_id`: INT, Foreign Key → doctors(id) ON DELETE RESTRICT
+- `patient_id`: INT, Foreign Key → patients(id) ON DELETE CASCADE
+- `appointment_time`: DATETIME, Not Null
+- `duration_minutes`: INT, Default 60
+- `status`: INT, Not Null, Default 0 *(0 = Scheduled, 1 = Completed, 2 = Cancelled)*
+
+#### Architectural Logic & Design Justifications:
+* **Overlapping Appointment Prevention:** The database layer enforces a composite constraint `UNIQUE(doctor_id, appointment_time)` to block double-bookings at the engine level. Overlap evaluation logic across varying time scales is managed by the Spring Boot Application Tier before issuing writes.
+* **Deletion Cascades:** If a patient is expunged, their appointments cascade (`ON DELETE CASCADE`) to free up scheduling slots. However, if a doctor profile is deleted, the operational system blocks it (`ON DELETE RESTRICT`) to preserve structural auditing records.
+* **History Preservation:** Appointment histories are held indefinitely in MySQL to feed statistical usage dashboards and provide audit compliance parameters.
 
 ---
 
-## 2. MongoDB Document Collection Design
+## MongoDB Collection Design
 
-Clinical operations require flexible schemas because medical notes, symptom checklists, and medication instructions vary widely between visits. We utilize **MongoDB** to store patient prescriptions under a `prescriptions` collection.
+Clinical charts, prescriptions, and health summaries fluctuate naturally depending on the medical checkup type. Forcing these variables into a strict SQL structure results in sparse, empty tables filled with NULL values. MongoDB resolves this by storing dynamic, nested document objects.
 
-### 2.1 Collection: `prescriptions`
-Each document captures a detailed clinical encounter, nesting medications and specific diagnostic criteria seamlessly inside a single document.
+### Collection: prescriptions
+Captures dynamic medical encounter summaries and nested pharmacy order matrices inside a single flexible BSON document structure.
 
 ```json
 {
-  "_id": {"$oid": "6675ca2e12f4b32a74c8e19a"},
-  "appointment_id": 1042,
-  "patient_id": 85,
-  "doctor_id": 12,
-  "visit_date": "2026-06-21T14:30:00Z",
-  "diagnosis": "Acute Bronchitis",
+  "_id": "ObjectId('6675ca2e12f4b32a74c8e19a')",
+  "appointmentId": 51,
+  "patientId": 85,
+  "patientName": "John Smith",
+  "doctorId": 12,
+  "encounterDate": "2026-06-21T14:30:00Z",
+  "symptoms": [
+    "Persistent dry cough",
+    "Mild fatigue",
+    "Low-grade fever"
+  ],
   "vitals": {
-    "blood_pressure": "120/80",
-    "heart_rate_bpm": 76,
-    "temperature_celsius": 37.2
+    "bloodPressure": "120/80",
+    "heartRateBpm": 76,
+    "temperatureCelsius": 37.2
   },
   "medications": [
     {
-      "drug_name": "Amoxicillin",
+      "drugName": "Amoxicillin",
       "dosage": "500mg",
       "frequency": "Three times daily",
-      "duration_days": 7
+      "durationDays": 7,
+      "refillCount": 1
     },
     {
-      "drug_name": "Guaifenesin",
-      "dosage": "600mg",
-      "frequency": "Every 12 hours as needed",
-      "duration_days": 5
+      "drugName": "Guaifenesin Syrup",
+      "dosage": "10ml",
+      "frequency": "Every 6 hours as needed",
+      "durationDays": 5,
+      "refillCount": 0
     }
   ],
-  "doctor_notes": "Patient should rest and increase fluid intake. Follow up if cough persists past 10 days."
+  "doctorNotes": "Patient shows signs of clear respiratory congestion. Advised lifestyle modifications including extensive hydration. Follow up required if symptoms persist beyond a week.",
+  "pharmacy": {
+    "name": "Walgreens SF",
+    "location": "Market Street",
+    "electronicTransmissionStatus": "SENT"
+  },
+  "schemaVersion": 1
 }
